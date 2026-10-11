@@ -1,0 +1,14 @@
+{
+  "name": "ISS Orbital Control",
+  "short_name": "ISS Control",
+  "description": "Live / replay control for ESP32 ISS data physicalization",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#10151e",
+  "theme_color": "#10151e",
+  "icons": [
+    {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+    {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ]
+}

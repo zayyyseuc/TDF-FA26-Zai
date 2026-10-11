@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#10151e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="ISS Control">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <title>ISS Control — orbital data</title>
+  <style>
+    :root { color-scheme: dark; --bg:#10151e; --card:#1b2330; --line:#334052; --accent:#a3bffa; --muted:#a1adbf; --text:#eff3fa; }
+    * {box-sizing:border-box}
+    body {margin:0; background:radial-gradient(ellipse at 65% -10%,#27344b 0%,#10151e 50%,#0d121a 100%); font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--text); min-height:100vh}
+    main{width:min(100% - 32px,440px);margin:0 auto;padding:28px 0 42px}
+    header{display:flex; align-items:center; justify-content:space-between;gap:12px;margin-bottom:26px}
+    .eyebrow{font-size:10px;letter-spacing:.17em;text-transform:uppercase;color:var(--muted);font-weight:650}
+    h1{font-size:28px;letter-spacing:-.06em;font-weight:650;margin:2px 0 0}
+    .tag{font-size:11px;color:#b8e8da;border:1px solid #3b625c;padding:7px 10px;border-radius:30px;white-space:nowrap;display:flex;align-items:center;gap:7px}
+    .dot{width:7px;height:7px;border-radius:50%;background:#50dbb8;box-shadow:0 0 8px #50dbb8;flex:0 0 auto}
+    .dot.off{background:#d69a86;box-shadow:none}
+    .card{background:#1b2330;border:1px solid #354153;border-radius:20px;padding:19px;margin:0 0 14px;box-shadow:0 10px 26px #00000018}
+    .flex{display:flex;align-items:center;justify-content:space-between;gap:12px}
+    .section{font-size:11px;letter-spacing:.12em;color:#b2bed0;font-weight:700;text-transform:uppercase;margin:0 0 12px}
+    .tabs{background:#101722;padding:4px;border:1px solid #2d3949;display:grid;grid-template-columns:1fr 1fr;border-radius:13px;gap:4px}
+    button {font:inherit;cursor:pointer}
+    .tabs button{border:0;background:none;color:#a2b0c4;border-radius:9px;padding:12px 6px;font-size:13px;font-weight:600;transition:background .2s}
+    .tabs button[aria-pressed=true]{color:#f6f8fc;background:#3b4f6c}
+    .tiny{font-size:12px;color:var(--muted)}
+    .status{margin:12px 0 0;min-height:17px}
+    .orbit{height:206px;position:relative;display:grid;place-items:center;overflow:hidden}
+    .orbit-ring{width:174px;height:174px;border:1px dashed #4b5c73;border-radius:50%;position:relative;display:grid;place-items:center;box-shadow:0 0 50px #3460a111 inset}
+    .orbit-ring:before,.orbit-ring:after{content:"";position:absolute;inset:18px;border:1px solid #344657;border-radius:50%}
+    .orbit-ring:after{inset:43px;border-style:dotted;opacity:.65}
+    .orbit-core{text-align:center;position:relative;z-index:1}
+    .lon{font-size:24px;font-variant-numeric:tabular-nums;letter-spacing:-.04em;font-weight:600;line-height:1.1}
+    .lon-label{font-size:10px;color:#98a8bf;letter-spacing:.09em;text-transform:uppercase;margin-top:6px}
+    .orbit-star{position:absolute;width:14px;height:14px;border-radius:50%;background:#92c9ff;box-shadow:0 0 8px 3px #75bfffbb,0 0 20px 5px #668eff77;transform:translate(-50%,-50%);z-index:2;transition:left .6s linear,top .6s linear}
+    .orbit-star.off{opacity:0}
+    .mini{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px}
+    .metric{padding:11px 9px;background:#141c27;border-radius:12px;text-align:center;min-width:0}
+    .metric b{font-size:16px;font-weight:650;letter-spacing:-.04em;display:block;font-variant-numeric:tabular-nums}
+    .metric span{font-size:10px;color:#a0acbe;display:block;margin-top:5px}
+    .row{margin:17px 0 0}
+    .row:first-child{margin-top:0}
+    label{display:block;font-size:13px;font-weight:600}
+    output{font-weight:600;color:#b9d0ff;font-variant-numeric:tabular-nums}
+    input[type=range]{width:100%;accent-color:#9dc1ff;margin:12px 0 3px}
+    input[type=checkbox]{accent-color:#9dc1ff;width:19px;height:19px}
+    .sub{color:#a3afc0;font-size:11px;margin:0 0 10px}
+    .primary{background:#a8c6fc;color:#16233a;border:0;border-radius:12px;font-weight:700;padding:12px 17px;width:100%;margin-top:15px}
+    .secondary{background:#293547;color:#e8ecf6;border:1px solid #4b5f79;border-radius:12px;padding:12px 14px;font-size:13px;font-weight:600}
+    .secondary:disabled{opacity:.4;cursor:not-allowed}
+    .small{font-size:11px;color:#98a8bf}
+    .message{color:#b4d5ee;font-size:12px;min-height:17px;margin:8px 0 0}
+    .message.error{color:#ffc0a8}
+    .footer{font-size:11px;color:#8794a6;margin:18px 8px 0;line-height:1.6}
+    .hidden{display:none!important}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><div class="eyebrow">Data physicalization / prototype</div><h1>ISS Control<span style="color:#a3bffa">.</span></h1></div>
+    <div class="tag"><span id="ledStatus" class="dot off"></span><span id="connection">Connecting</span></div>
+  </header>
+  <section class="card">
+    <div class="section">01 / Data source</div>
+    <div class="tabs" role="group" aria-label="Data source">
+      <button id="modeLive" aria-pressed="true">◉ &nbsp;Live API</button>
+      <button id="modeReplay" aria-pressed="false">▷ &nbsp;Replay</button>
+    </div>
+    <p id="sourceInfo" class="tiny status">Connecting to ESP32…</p>
+    <div class="orbit">
+      <div id="orbitRing" class="orbit-ring">
+        <div id="orbitStar" class="orbit-star off"></div>
+        <div class="orbit-core"><div class="lon" id="longitude">—</div><div class="lon-label">ISS Longitude</div></div>
+      </div>
+    </div>
+    <div class="mini">
+      <div class="metric"><b id="latitude">—</b><span>Latitude</span></div>
+      <div class="metric"><b id="ledPosition">—</b><span>Outer LED</span></div>
+      <div class="metric"><b id="lastUpdate">—</b><span>Live age</span></div>
+    </div>
+  </section>
+  <section id="replaySettings" class="card hidden">
+    <div class="section">02 / Playback settings</div>
+    <div class="flex"><label for="speed">Playback speed</label><output id="speedValue">1×</output></div>
+    <input id="speed" type="range" min="1" max="12" step="1" value="1">
+    <p class="sub">1× compresses the entire recorded history into 120 seconds; 10× into 12 seconds.</p>
+    <div class="flex"><span class="small">Recorded progress</span><span class="small" id="replayProgress">0%</span></div>
+    <div style="height:5px;background:#0e1520;border-radius:5px;margin-top:9px;overflow:hidden"><div id="replayBar" style="height:100%;width:0;background:#a3bffa"></div></div>
+    <button class="primary" id="applySpeed">Apply replay speed</button>
+  </section>
+  <section class="card">
+    <div class="section">03 / Haptic feedback</div>
+    <div class="flex"><label for="enableHaptic">DA7280 motor</label><input type="checkbox" id="enableHaptic" checked></div>
+    <div class="row"><div class="flex"><label for="threshold">Longitude step</label><output id="thresholdValue">0.5°</output></div>
+      <input id="threshold" type="range" min="0.1" max="10" step="0.1" value="0.5"></div>
+    <div class="row"><div class="flex"><label for="intensity">Pulse intensity</label><output id="intensityValue">25 / 127</output></div>
+      <input id="intensity" type="range" min="1" max="90" step="1" value="25"></div>
+    <p class="sub">Every accumulated longitude step triggers a short pulse. During accelerated replay, the minimum pulse gap limits frequency.</p>
+    <button class="primary" id="applyHaptic">Apply haptic settings</button>
+    <button class="secondary" id="testHaptic" style="width:100%;margin-top:9px">Test single pulse</button>
+    <p id="message" class="message" role="status"></p>
+  </section>
+  <section class="card">
+    <div class="section">04 / Device status</div>
+    <div class="flex tiny"><span>Internet Wi-Fi (STA)</span><span id="staStatus">—</span></div>
+    <div class="flex tiny" style="margin-top:9px"><span>Local control address</span><span id="deviceIp">—</span></div>
+    <div class="flex tiny" style="margin-top:9px"><span>Saved ISS records</span><span id="samples">—</span></div>
+    <div class="flex tiny" style="margin-top:9px"><span>Haptic driver</span><span id="hapticStatus">—</span></div>
+  </section>
+  <p class="footer">Locally served by the ESP32. No cloud server or app installation required for presentation. The visualization previews physical LEDs; it does not replace the actual light or vibration outputs.</p>
+</main>
+<script>
+  const el = (id) => document.getElementById(id);
+  let lastState = null;
+  let touchedHaptic = false;
+  let touchedSpeed = false;
+  let inflight = false;
+  let messagingTimer;
+  function message(txt, bad=false){
+    const node=el('message'); node.textContent=txt; node.classList.toggle('error',bad);
+    clearTimeout(messagingTimer); messagingTimer=setTimeout(()=>node.textContent='',4400);
+  }
+  async function api(path, body){
+    const response=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined,cache:'no-store'});
+    const data=await response.json();
+    if(!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    return data;
+  }
+  function displayState(s){
+    lastState=s;
+    el('ledStatus').classList.remove('off');
+    el('connection').textContent='ESP32 online';
+    el('modeLive').setAttribute('aria-pressed',s.mode==='live');
+    el('modeReplay').setAttribute('aria-pressed',s.mode==='replay');
+    el('replaySettings').classList.toggle('hidden',s.mode!=='replay');
+    el('modeReplay').disabled=!s.hasReplay;
+    el('modeReplay').title=s.hasReplay?'':'No iss_data.h: generate from your recorded JSON';
+    const liveCurrent=s.staConnected && s.liveDataAgeSec>=0 && s.liveDataAgeSec<=30;
+    el('sourceInfo').textContent=s.mode==='live'?
+      (liveCurrent?'Live ISS data · auto refresh ~1.2s':'Live selected · waiting for valid ISS data / Wi-Fi'):
+      `Saved ISS trajectory · ${s.samples} recorded points`;
+    el('longitude').textContent=s.hasPosition?`${Number(s.longitude).toFixed(2)}°`:'—';
+    el('latitude').textContent=s.hasPosition?`${Number(s.latitude).toFixed(1)}°`:'—';
+    el('ledPosition').textContent=s.hasPosition?`${s.led} / ${s.outerLeds}`:'—';
+    el('lastUpdate').textContent=s.liveDataAgeSec>=0?`${s.liveDataAgeSec}s`:'—';
+    el('staStatus').textContent=s.staConnected?'Connected':'Offline';
+    el('deviceIp').textContent=s.apIp;
+    el('samples').textContent=s.samples;
+    el('hapticStatus').textContent=s.hapticReady?'Connected':'Not detected';
+    el('testHaptic').disabled=!s.hapticReady;
+    el('replayProgress').textContent=`${Math.round(s.replayProgress*100)}%`;
+    el('replayBar').style.width=`${Math.max(0,Math.min(100,s.replayProgress*100))}%`;
+    if(!touchedHaptic){
+      el('threshold').value=s.hapticThreshold;
+      el('thresholdValue').textContent=`${Number(s.hapticThreshold).toFixed(1)}°`;
+      el('intensity').value=s.hapticIntensity;
+      el('intensityValue').textContent=`${s.hapticIntensity} / 127`;
+      el('enableHaptic').checked=s.hapticEnabled;
+    }
+    if(!touchedSpeed){
+      el('speed').value=s.replaySpeed;
+      el('speedValue').textContent=`${s.replaySpeed}×`;
+    }
+    const star=el('orbitStar');
+    star.classList.toggle('off',!s.hasPosition);
+    if(s.hasPosition){
+      const angle=(s.led-1)/s.outerLeds*Math.PI*2-Math.PI/2;
+      star.style.left=`${50+46*Math.cos(angle)}%`;
+      star.style.top=`${50+46*Math.sin(angle)}%`;
+    }
+  }
+  async function poll(){
+    if(inflight) return;
+    inflight=true;
+    try{displayState(await api('/api/status'));}
+    catch(err){el('connection').textContent='Disconnected';el('ledStatus').classList.add('off');el('sourceInfo').textContent='Unable to reach ESP32. Check phone Wi-Fi.';}
+    finally{inflight=false;}
+  }
+  async function config(body){
+    try{displayState(await api('/api/config',body));message('Settings updated');}
+    catch(err){message(err.message,true);}
+  }
+  el('modeLive').addEventListener('click',()=>config({mode:'live'}));
+  el('modeReplay').addEventListener('click',()=>config({mode:'replay'}));
+  el('speed').addEventListener('input',()=>{el('speedValue').textContent=`${el('speed').value}×`;touchedSpeed=true;});
+  el('threshold').addEventListener('input',()=>{el('thresholdValue').textContent=`${Number(el('threshold').value).toFixed(1)}°`;touchedHaptic=true;});
+  el('intensity').addEventListener('input',()=>{el('intensityValue').textContent=`${el('intensity').value} / 127`;touchedHaptic=true;});
+  el('enableHaptic').addEventListener('change',()=>{touchedHaptic=true;});
+  el('applySpeed').addEventListener('click',async()=>{await config({speed:Number(el('speed').value)});touchedSpeed=false;});
+  el('applyHaptic').addEventListener('click',async()=>{
+    await config({threshold:Number(el('threshold').value),intensity:Number(el('intensity').value),hapticEnabled:el('enableHaptic').checked});touchedHaptic=false;
+  });
+  el('testHaptic').addEventListener('click',async()=>{try{await api('/api/haptic-test',{});message('Haptic test pulse requested');}catch(err){message(err.message,true);}});
+  if('serviceWorker' in navigator && window.isSecureContext){
+    navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  }
+  poll();setInterval(poll,1500);
+</script>
+</body>
+</html>
