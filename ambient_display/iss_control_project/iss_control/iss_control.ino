@@ -29,10 +29,10 @@
 // ---- Physical wiring (same as your existing sketch) ----
 #define OUTER_PIN 26          // A0 / GPIO26, outer NeoPixel DIN
 #define INNER_PIN 25          // A1 / GPIO25, inner NeoPixel DIN
-#define OUTER_LEDS 30         // CHANGE to physical number of OUTER LEDs
+#define OUTER_LEDS 17         // CHANGE to physical number of OUTER LEDs
 #define INNER_LEDS 8          // CHANGE to physical number of INNER LEDs (>=2)
-const uint8_t OUTER_BRIGHTNESS = 70;
-const uint8_t INNER_BRIGHTNESS = 55;
+const uint8_t OUTER_BRIGHTNESS = 125;
+const uint8_t INNER_BRIGHTNESS = 255;
 const bool REVERSE_ORBIT = false;
 
 // Change this password (>=8 chars) before presenting publicly.
