@@ -17,6 +17,7 @@ if not isinstance(records, list) or len(records) < 2:
     sys.exit("Expected the original ISS JSON format with at least two entries in records[].")
 
 points = []
+weather = []
 for record in records:
     t = int(record["timestamp"])
     lat = float(record["latitude"])
@@ -24,7 +25,22 @@ for record in records:
     if not (0 <= t <= 4294967295 and -90 <= lat <= 90 and -180 <= lon <= 180):
         sys.exit(f"Invalid ISS record: {record}")
     points.append((t, lat, lon))
+    sample = record.get("weather", record)
+    raw_code = sample.get("weather_code")
+    if raw_code is None:
+        weather.append((t, -1, 0.0, 0.0, 0, 1, False))
+        continue
+    code = int(raw_code)
+    temperature = float(sample.get("temperature_2m", sample.get("temperature", 0.0)))
+    precipitation = float(sample.get("precipitation", 0.0))
+    cloud = int(sample.get("cloud_cover", sample.get("cloudCover", 0)))
+    is_day = int(sample.get("is_day", sample.get("isDay", 1)))
+    if not (0 <= code <= 99 and -100 <= temperature <= 100 and
+            precipitation >= 0 and 0 <= cloud <= 100 and is_day in (0, 1)):
+        sys.exit(f"Invalid weather record: {record}")
+    weather.append((t, code, temperature, precipitation, cloud, is_day, True))
 points.sort(key=lambda p: p[0])
+weather.sort(key=lambda p: p[0])
 if points[-1][0] <= points[0][0]:
     sys.exit("Recording needs at least two distinct timestamps.")
 
@@ -34,6 +50,7 @@ lines = [
     "#include <stdint.h>",
     "#include <stddef.h>",
     "struct ISSPoint { uint32_t timestamp; float latitude; float longitude; };",
+    "struct WeatherPoint { uint32_t timestamp; int16_t code; float temperature; float precipitation; uint8_t cloudCover; bool isDay; bool valid; };",
     "const ISSPoint ISS_DATA[] = {",
 ]
 for timestamp, latitude, longitude in points:
@@ -41,6 +58,16 @@ for timestamp, latitude, longitude in points:
 lines.extend([
     "};",
     "constexpr size_t ISS_COUNT = sizeof(ISS_DATA) / sizeof(ISS_DATA[0]);",
+    "const WeatherPoint WEATHER_DATA[] = {",
+])
+for timestamp, code, temperature, precipitation, cloud, is_day, valid in weather:
+    lines.append(
+        f"  {{{timestamp}UL, {code}, {temperature:.3f}f, {precipitation:.3f}f, "
+        f"{cloud}, {is_day}, {'true' if valid else 'false'}}},"
+    )
+lines.extend([
+    "};",
+    "constexpr size_t WEATHER_COUNT = sizeof(WEATHER_DATA) / sizeof(WEATHER_DATA[0]);",
     "",
 ])
 out = project / "iss_control" / "iss_data.h"

@@ -1,7 +1,7 @@
 // ISS Control — Adafruit Feather ESP32 V2
 // Based on user's working neopixel_test_fixed(1).ino
 // Outer strip: one ISS star with location-based color + breathing
-// Inner strip: two independently random breathing stars
+// Inner strip: weather color with continuous breathing brightness
 // DA7280: subtle pulse per accumulated longitude change
 // Control: ESP32 SoftAP Web UI /api/status and /api/config
 // Live ISS HTTPS, or locally recorded ISS data (optional iss_data.h)
@@ -39,7 +39,11 @@ const bool REVERSE_ORBIT = false;
 const char *AP_SSID = "ISS-Control";
 const char *AP_PASSWORD = "OrbitDemo26";
 const char *ISS_URL = "https://api.wheretheiss.at/v1/satellites/25544";
+// Weather is fetched for the ISS ground-track position. Replace the two
+// arguments at fetchWeather() if the installation should use a fixed place.
+const char *WEATHER_API = "https://api.open-meteo.com/v1/forecast";
 const uint32_t FETCH_INTERVAL_MS = 1200UL;  // respect approximately 1 req/s API rate
+const uint32_t WEATHER_FETCH_INTERVAL_MS = 60000UL;
 const uint32_t WIFI_RETRY_MS = 10000UL;
 const uint32_t PREDICTION_LIMIT_MS = 4000UL;
 const uint32_t BASE_REPLAY_DURATION_MS = 120000UL; // 1x = 120 s to replay full recording
@@ -66,7 +70,9 @@ uint32_t previousMovementTimestamp = 0;
 // ACTIVE_MODE is only a byte, safe to read on the other core.
 enum DataMode : uint8_t { MODE_LIVE = 0, MODE_REPLAY = 1 };
 volatile uint8_t activeMode = MODE_LIVE;
+bool lightsEnabled = true;
 float replaySpeed = 1.0f;                    // 1x .. 12x
+float replayLightSpeed = 1.0f;               // 0.25x .. 4x, replay lighting animation only
 uint32_t replayStartMs = 0;
 uint32_t lastReplayCycle = UINT32_MAX;
 uint32_t lastReplayTrackMs = 0;
@@ -78,6 +84,7 @@ bool displayedPositionInitialized = false;
 uint32_t lastLogMs = 0;
 
 portMUX_TYPE issMutex = portMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE weatherMutex = portMUX_INITIALIZER_UNLOCKED;
 struct ISSState {
   float latitude;
   float longitude;
@@ -88,6 +95,17 @@ struct ISSState {
   bool valid;
 };
 ISSState iss = {0, 0, 0, 0, 0, 0, false};
+struct WeatherState {
+  int16_t code;
+  float temperature;
+  float precipitation;
+  uint8_t cloudCover;
+  bool isDay;
+  uint32_t receivedMs;
+  bool valid;
+};
+WeatherState liveWeather = {-1, 0, 0, 0, true, 0, false};
+WeatherState displayedWeather = {-1, 0, 0, 0, true, 0, false};
 
 // Colors identical to your working sketch.
 const uint32_t PALETTE[] = {
@@ -172,6 +190,11 @@ void restartSpark(uint8_t which, uint32_t now) {
   sparks[which].colorIndex = newColor;
 }
 void drawInnerScattered(uint32_t now) {
+  if (!lightsEnabled) {
+    innerStrip.clear();
+    innerStrip.show();
+    return;
+  }
   innerStrip.clear();
   for (uint8_t i = 0; i < SPARK_COUNT; i++) {
     Spark &s = sparks[i];
@@ -179,6 +202,65 @@ void drawInnerScattered(uint32_t now) {
     float phase = (now - s.start) / (float)s.duration;
     float level = (0.5f - 0.5f * cosf(2.0f * PI * phase)) * s.strength;
     innerStrip.setPixelColor(s.pixel, scaledColor(innerStrip, PALETTE[s.colorIndex], level));
+  }
+  innerStrip.show();
+}
+
+uint32_t lightAnimationNow(uint32_t now) {
+  if (activeMode != MODE_REPLAY) return now;
+  return (uint32_t)((double)now * replayLightSpeed);
+}
+
+uint32_t weatherColor(int16_t code) {
+  if (code == 0) return 0xFFD166;                   // clear
+  if (code == 1 || code == 2) return 0xB9D7FF;      // partly cloudy
+  if (code == 3) return 0x8D99AE;                   // overcast
+  if (code == 45 || code == 48) return 0xC0CAD6;    // fog
+  if ((code >= 51 && code <= 57) || (code >= 80 && code <= 82)) return 0x4B96FF; // drizzle/rain
+  if (code >= 61 && code <= 67) return 0x3987D6;    // rain
+  if (code >= 71 && code <= 77) return 0xB9F2FF;    // snow
+  if (code >= 95) return 0xB982FF;                 // thunderstorm
+  return 0x6E7F99;                                 // unknown
+}
+float weatherPulsePeriod(int16_t code) {
+  if (code >= 95) return 420.0f;                   // storm flicker
+  if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return 2200.0f;
+  if (code >= 71 && code <= 77) return 3200.0f;
+  return 5200.0f;
+}
+void drawInnerWeather(uint32_t now) {
+  if (!lightsEnabled) {
+    innerStrip.clear();
+    innerStrip.show();
+    return;
+  }
+  WeatherState weather;
+  portENTER_CRITICAL(&weatherMutex);
+  weather = displayedWeather;
+  portEXIT_CRITICAL(&weatherMutex);
+  innerStrip.clear();
+  if (!weather.valid) {
+    uint32_t neutral = 0x506070;
+    uint32_t animationNow = lightAnimationNow(now);
+    float level = 0.25f + 0.12f * (0.5f - 0.5f * cosf(2.0f * PI * (animationNow % 5000UL) / 5000.0f));
+    for (uint8_t i = 0; i < INNER_LEDS; i++) {
+      innerStrip.setPixelColor(i, scaledColor(innerStrip, neutral, level));
+    }
+    innerStrip.show();
+    return;
+  }
+  // The color stays tied to the weather code, while brightness keeps
+  // breathing continuously even when the weather code does not change.
+  uint32_t animationNow = lightAnimationNow(now);
+  float period = weatherPulsePeriod(weather.code);
+  float phase = (animationNow % (uint32_t)period) / period;
+  float level = 0.18f + 0.72f * (0.5f - 0.5f * cosf(2.0f * PI * phase));
+  if (!weather.isDay) level *= 0.72f;
+  if (weather.code >= 95 && (animationNow % 900UL) < 90UL) level = 1.0f;
+  uint32_t color = weatherColor(weather.code);
+  for (uint8_t i = 0; i < INNER_LEDS; i++) {
+    float offset = (i % 2) ? 0.92f : 1.0f;
+    innerStrip.setPixelColor(i, scaledColor(innerStrip, color, level * offset));
   }
   innerStrip.show();
 }
@@ -249,6 +331,11 @@ void updateHaptic(uint32_t now) {
 }
 
 void drawOuterOrbit(uint32_t now) {
+  if (!lightsEnabled) {
+    outerStrip.clear();
+    outerStrip.show();
+    return;
+  }
   if (!haveOrbitPosition) {
     outerStrip.clear();
     outerStrip.show();
@@ -265,7 +352,8 @@ void drawOuterOrbit(uint32_t now) {
   int led = (int)floorf(displayedPosition + 0.5f) % OUTER_LEDS;
   float distance = fabsf(wrappedDelta(displayedPosition - led));
   float travelFade = 0.5f + 0.5f * cosf(2.0f * PI * distance);
-  float breathPhase = (now % 5000UL) / 5000.0f;
+  uint32_t animationNow = lightAnimationNow(now);
+  float breathPhase = (animationNow % 5000UL) / 5000.0f;
   float breath = 0.82f + 0.18f * (0.5f - 0.5f * cosf(2.0f * PI * breathPhase));
   outerStrip.clear();
   outerStrip.setPixelColor(led,
@@ -321,11 +409,56 @@ bool fetchISS() {
   if (accepted) Serial.printf("LIVE ISS: lat=%.3f lon=%.3f\n", lat, lon);
   return accepted;
 }
+bool fetchWeather(float latitude, float longitude) {
+  WiFiClientSecure client;
+  client.setInsecure(); // DEMO ONLY: doesn't verify HTTPS certificate
+  HTTPClient http;
+  http.setConnectTimeout(3500);
+  http.setTimeout(5000);
+  String url = String(WEATHER_API) +
+    "?latitude=" + String(latitude, 4) +
+    "&longitude=" + String(longitude, 4) +
+    "&current=weather_code,temperature_2m,precipitation,cloud_cover,is_day&timezone=UTC";
+  if (!http.begin(client, url)) return false;
+  int code = http.GET();
+  if (code != HTTP_CODE_OK) {
+    Serial.printf("Weather fetch HTTP error: %d\n", code);
+    http.end();
+    return false;
+  }
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, http.getStream());
+  http.end();
+  JsonObject current = doc["current"];
+  if (err || current.isNull() || current["weather_code"].isNull()) {
+    Serial.println("Weather data invalid");
+    return false;
+  }
+  int weatherCode = current["weather_code"].as<int>();
+  float temperature = current["temperature_2m"] | 0.0f;
+  float precipitation = current["precipitation"] | 0.0f;
+  int cloud = current["cloud_cover"] | 0;
+  bool isDay = current["is_day"] | 1;
+  if (weatherCode < 0 || weatherCode > 99 || cloud < 0 || cloud > 100) return false;
+  portENTER_CRITICAL(&weatherMutex);
+  liveWeather.code = (int16_t)weatherCode;
+  liveWeather.temperature = temperature;
+  liveWeather.precipitation = precipitation;
+  liveWeather.cloudCover = (uint8_t)cloud;
+  liveWeather.isDay = isDay;
+  liveWeather.receivedMs = millis();
+  liveWeather.valid = true;
+  portEXIT_CRITICAL(&weatherMutex);
+  Serial.printf("LIVE WEATHER: code=%d temp=%.1fC cloud=%d%%\n",
+    weatherCode, temperature, cloud);
+  return true;
+}
 void issNetworkTask(void *ignored) {
   bool wasConnected = false;
   bool wasLive = false;
   uint32_t lastRetry = millis();
   uint32_t lastFetch = 0;
+  uint32_t lastWeatherFetch = 0;
   while (true) {
     uint32_t now = millis();
     bool connected = WiFi.status() == WL_CONNECTED;
@@ -345,6 +478,16 @@ void issNetworkTask(void *ignored) {
       lastFetch = now;
       fetchISS();
     }
+    if (connected && isLive && (uint32_t)(now - lastWeatherFetch) >= WEATHER_FETCH_INTERVAL_MS) {
+      ISSState latest;
+      portENTER_CRITICAL(&issMutex);
+      latest = iss;
+      portEXIT_CRITICAL(&issMutex);
+      if (latest.valid) {
+        lastWeatherFetch = now;
+        fetchWeather(latest.latitude, latest.longitude);
+      }
+    }
     wasLive = isLive;
     wasConnected = connected;
     vTaskDelay(pdMS_TO_TICKS(120));
@@ -354,10 +497,22 @@ void issNetworkTask(void *ignored) {
 // ---- Replay sampled positions from REAL historical ISS data ----
 #if HAS_REPLAY
 void replayAt(uint32_t now) {
-  if (ISS_COUNT < 2) { haveOrbitPosition = false; return; }
+  if (ISS_COUNT < 2) {
+    haveOrbitPosition = false;
+    portENTER_CRITICAL(&weatherMutex);
+    displayedWeather.valid = false;
+    portEXIT_CRITICAL(&weatherMutex);
+    return;
+  }
   uint32_t first = ISS_DATA[0].timestamp;
   uint32_t last = ISS_DATA[ISS_COUNT - 1].timestamp;
-  if (last <= first) { haveOrbitPosition = false; return; }
+  if (last <= first) {
+    haveOrbitPosition = false;
+    portENTER_CRITICAL(&weatherMutex);
+    displayedWeather.valid = false;
+    portEXIT_CRITICAL(&weatherMutex);
+    return;
+  }
   uint32_t duration = (uint32_t)(BASE_REPLAY_DURATION_MS / replaySpeed);
   if (duration < 2000) duration = 2000;
   uint32_t elapsed = now - replayStartMs;
@@ -389,6 +544,28 @@ void replayAt(uint32_t now) {
   displayLat = a.latitude + (b.latitude - a.latitude) * f;
   currentOrbitPos = longitudeToPosition(displayLon);
   haveOrbitPosition = true;
+  WeatherPoint wa = WEATHER_DATA[lo];
+  WeatherPoint wb = WEATHER_DATA[lo + 1];
+  WeatherState replayWeather;
+  if (wa.valid && wb.valid) {
+    replayWeather.code = f < 0.5f ? wa.code : wb.code;
+    replayWeather.temperature = wa.temperature + (wb.temperature - wa.temperature) * f;
+    replayWeather.precipitation = wa.precipitation + (wb.precipitation - wa.precipitation) * f;
+    replayWeather.cloudCover = (uint8_t)(wa.cloudCover + (wb.cloudCover - wa.cloudCover) * f + 0.5f);
+    replayWeather.isDay = f < 0.5f ? wa.isDay : wb.isDay;
+  } else {
+    const WeatherPoint &nearest = wa.valid ? wa : wb;
+    replayWeather.code = nearest.code;
+    replayWeather.temperature = nearest.temperature;
+    replayWeather.precipitation = nearest.precipitation;
+    replayWeather.cloudCover = nearest.cloudCover;
+    replayWeather.isDay = nearest.isDay;
+  }
+  replayWeather.receivedMs = now;
+  replayWeather.valid = wa.valid || wb.valid;
+  portENTER_CRITICAL(&weatherMutex);
+  displayedWeather = replayWeather;
+  portEXIT_CRITICAL(&weatherMutex);
   if ((uint32_t)(now - lastReplayTrackMs) >= 100) {
     trackLongitude(displayLon, 0, true);
     lastReplayTrackMs = now;
@@ -402,6 +579,9 @@ void liveAt(uint32_t now) {
   portEXIT_CRITICAL(&issMutex);
   if (!latest.valid || (uint32_t)(now - latest.receivedMs) > 30000UL) {
     haveOrbitPosition = false;
+    portENTER_CRITICAL(&weatherMutex);
+    displayedWeather.valid = false;
+    portEXIT_CRITICAL(&weatherMutex);
     return;
   }
   if (latest.timestamp != lastLiveAppliedTimestamp) {
@@ -413,6 +593,19 @@ void liveAt(uint32_t now) {
   displayLat = latest.latitude;
   displayLon = latest.longitude;
   haveOrbitPosition = true;
+  WeatherState currentWeather;
+  portENTER_CRITICAL(&weatherMutex);
+  currentWeather = liveWeather;
+  portEXIT_CRITICAL(&weatherMutex);
+  if (currentWeather.valid && (uint32_t)(now - currentWeather.receivedMs) <= 180000UL) {
+    portENTER_CRITICAL(&weatherMutex);
+    displayedWeather = currentWeather;
+    portEXIT_CRITICAL(&weatherMutex);
+  } else {
+    portENTER_CRITICAL(&weatherMutex);
+    displayedWeather.valid = false;
+    portEXIT_CRITICAL(&weatherMutex);
+  }
 }
 
 // ---- REST endpoints. Same origin as page, no CORS required. ----
@@ -435,12 +628,22 @@ void handleStatus() {
   }
   doc["outerLeds"] = OUTER_LEDS;
   doc["innerLeds"] = INNER_LEDS;
+  doc["lightsEnabled"] = lightsEnabled;
   doc["hapticReady"] = hapticReady;
   doc["hapticEnabled"] = hapticEnabled;
   doc["hapticThreshold"] = longitudeThresholdDeg;
   doc["hapticIntensity"] = hapticIntensity;
   doc["hapticProgress"] = longitudeAccumulatedDeg;
   doc["replaySpeed"] = replaySpeed;
+  doc["replayLightSpeed"] = replayLightSpeed;
+  WeatherState weather;
+  portENTER_CRITICAL(&weatherMutex);
+  weather = displayedWeather;
+  portEXIT_CRITICAL(&weatherMutex);
+  doc["weatherValid"] = weather.valid;
+  doc["weatherCode"] = weather.valid ? weather.code : -1;
+  doc["weatherTemperature"] = weather.valid ? weather.temperature : 0;
+  doc["weatherCloudCover"] = weather.valid ? weather.cloudCover : 0;
 #if HAS_REPLAY
   doc["samples"] = ISS_COUNT;
   uint32_t duration = (uint32_t)(BASE_REPLAY_DURATION_MS / replaySpeed);
@@ -478,6 +681,9 @@ void handleConfig() {
     if (m != activeMode) {
       activeMode = m;
       resetMotionTracking();
+      portENTER_CRITICAL(&weatherMutex);
+      displayedWeather.valid = false;
+      portEXIT_CRITICAL(&weatherMutex);
       replayStartMs = millis();
       Serial.printf("DATA MODE: %s\n", mode.c_str());
     }
@@ -491,6 +697,13 @@ void handleConfig() {
     replaySpeed = value;
     replayStartMs = millis();
     resetMotionTracking();
+  }
+  if (!doc["lightSpeed"].isNull()) {
+    float value = doc["lightSpeed"].as<float>();
+    if (!isfinite(value) || value < 0.25f || value > 4.0f) {
+      respondJSON(400, "{\"error\":\"lightSpeed must be 0.25..4\"}"); return;
+    }
+    replayLightSpeed = value;
   }
   if (!doc["threshold"].isNull()) {
     float value = doc["threshold"].as<float>();
@@ -511,6 +724,10 @@ void handleConfig() {
   if (!doc["hapticEnabled"].isNull()) {
     hapticEnabled = doc["hapticEnabled"].as<bool>();
     if (!hapticEnabled) pendingHapticPulses = 0;
+  }
+  if (!doc["lightsEnabled"].isNull()) {
+    lightsEnabled = doc["lightsEnabled"].as<bool>();
+    Serial.printf("LIGHTS: %s\n", lightsEnabled ? "ON" : "OFF");
   }
   handleStatus();
 }
@@ -607,7 +824,7 @@ void loop() {
   else replayAt(now);
 #endif
   updateHaptic(now);
-  drawInnerScattered(now);
+  drawInnerWeather(now);
   drawOuterOrbit(now);
   if ((uint32_t)(now - lastLogMs) >= 5000UL) {
     Serial.printf("Mode=%s, lon=%.2f, haptic=%.2f/%.2f deg\n",

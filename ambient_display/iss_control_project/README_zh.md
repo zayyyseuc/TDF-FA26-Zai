@@ -3,10 +3,12 @@
 ## 功能
 
 - **外圈 NeoPixel / A0, GPIO26**：仅一颗星光，根据 ISS 经度移动，移动时淡入淡出、循环变色。
-- **内圈 NeoPixel / A1, GPIO25**：两颗随机独立的渐变呼吸光。
+- **内圈 NeoPixel / A1, GPIO25**：根据天气变色；晴天黄、云天浅蓝、雾灰、雨蓝、雪青、雷暴紫。
 - **DA7280 Qwiic / SDA+SCL**：经度累计变化触发短振动，可通过网页调阈值、振动强度或测试单次脉冲。
+- **网页总灯光开关**：可在网页上一键关闭或恢复外圈、内圈 NeoPixel；关闭时 ISS / 天气数据和动画仍继续运行。
 - **Live API**：通过一个有互联网访问权限的 Wi-Fi 调用 `api.wheretheiss.at`，间隔约 1.2s。
-- **Replay**：使用你之前抓取的真实 `iss_data.json`；保存为 Arduino header，重放速度可从 1×–12× 调节。无需重新请求 API。
+- **Live 天气**：使用无需 API key 的 Open-Meteo，默认请求 ISS 当前地面轨迹位置的天气，约每 60s 更新一次。
+- **Replay**：使用你之前抓取的真实 `iss_data.json`；每条 `records[]` 可附带天气快照，保存为 Arduino header，重放速度可从 1×–12× 调节。无需重新请求 API。
 - **控制网页**：ESP32 自建 `ISS-Control` Wi-Fi，手机访问 `http://192.168.4.1`。
 
 ## 1. 准备文件
@@ -44,7 +46,35 @@ python3 tools/json_to_header.py
 python3 tools/json_to_header.py ~/Downloads/iss_data.json
 ```
 
-脚本会自动生成 `iss_control/iss_data.h`。**无需再次抓取 API**，也不要使用旧 JSON 中按 8 个灯计算的 `led_position` 字段；代码只读取历史 `latitude/longitude/timestamp`，按照当前外圈 LED 数量重算。
+脚本会自动生成 `iss_control/iss_data.h`。**无需再次抓取 ISS API**，也不要使用旧 JSON 中按 8 个灯计算的 `led_position` 字段；代码只读取历史 `latitude/longitude/timestamp`，按照当前外圈 LED 数量重算。
+
+如果要让 Replay 同时回放天气，在每条 ISS record 中加入 `weather`：
+
+```json
+{
+  "timestamp": 1791497619,
+  "latitude": 33.871545,
+  "longitude": 138.15753,
+  "weather": {
+    "weather_code": 61,
+    "temperature_2m": 18.4,
+    "precipitation": 0.8,
+    "cloud_cover": 92,
+    "is_day": 1
+  }
+}
+```
+
+字段来自 Open-Meteo 的实时 `current` 响应或历史 Archive API 响应。没有 `weather` 的旧记录仍会正常导入 ISS replay，但对应时刻的内圈会显示低亮中性蓝灰色。
+
+也可以直接根据现有 ISS 轨迹抓取历史天气。脚本会保留原始文件，并生成新的 `iss_weather_data.json`：
+
+```bash
+python3 tools/fetch_weather_replay.py
+python3 tools/json_to_header.py iss_control/iss_weather_data.json
+```
+
+历史天气使用 Open-Meteo Archive API 的逐小时数据，每个 ISS 记录匹配最近的小时样本。
 
 没找到 `iss_data.h` 时固件仍可编译，但 Replay 按钮会禁用（页面会显示 saved records = 0）。
 
@@ -70,7 +100,7 @@ Arduino IDE → Board = **Adafruit Feather ESP32 V2**，Upload Speed 建议 **11
 2. ESP32 会创建 **ISS-Control** Wi-Fi，默认密码在代码顶部 `AP_PASSWORD` 中（出于演示方便，**展示前请更换密码**）。
 3. 手机连接 `ISS-Control` Wi-Fi。如果手机提示该网络没有互联网，选择“保持连接”。
 4. 在 Safari/Chrome 输入 **`http://192.168.4.1`**，注意 HTTP，而非 HTTPS。
-5. 页面可切换 **Live API / Replay**；调 Replay Speed（1×–12×）、Longitude Step（0.1–10°）、Haptic Intensity；按 “Test single pulse” 可测试马达。
+5. 页面可切换 **Live API / Replay**；可通过 **All NeoPixels** 一键关闭或恢复两组灯；Replay 中可分别调节 ISS 轨迹速度（1×–12×）和灯光动画速度（0.25×–4×）；还可调 Longitude Step（0.1–10°）、Haptic Intensity；按 “Test single pulse” 可测试马达。天气状态会显示在 Device status。
 6. 两组 NeoPixel 一直显示原有动画，切换时会重置经度累计值，避免离线轨迹切换造成错误振动。
 
 ### Demo 现场的网络架构

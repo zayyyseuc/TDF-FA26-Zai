@@ -53,6 +53,15 @@
     .primary{background:#a8c6fc;color:#16233a;border:0;border-radius:12px;font-weight:700;padding:12px 17px;width:100%;margin-top:15px}
     .secondary{background:#293547;color:#e8ecf6;border:1px solid #4b5f79;border-radius:12px;padding:12px 14px;font-size:13px;font-weight:600}
     .secondary:disabled{opacity:.4;cursor:not-allowed}
+    .power-toggle{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:13px 14px;background:#141c27;border:1px solid #334052;border-radius:12px}
+    .power-toggle label{font-size:14px}
+    .switch{position:relative;width:48px;height:28px;flex:0 0 auto}
+    .switch input{position:absolute;opacity:0;width:1px;height:1px}
+    .switch-track{position:absolute;inset:0;background:#39475b;border-radius:99px;cursor:pointer;transition:background .2s}
+    .switch-track:before{content:"";position:absolute;width:20px;height:20px;left:4px;top:4px;background:#d4dceb;border-radius:50%;transition:transform .2s}
+    .switch input:checked + .switch-track{background:#50c5a7}
+    .switch input:checked + .switch-track:before{transform:translateX(20px);background:#fff}
+    .switch input:focus-visible + .switch-track{outline:2px solid #a8c6fc;outline-offset:3px}
     .small{font-size:11px;color:#98a8bf}
     .message{color:#b4d5ee;font-size:12px;min-height:17px;margin:8px 0 0}
     .message.error{color:#ffc0a8}
@@ -85,17 +94,32 @@
       <div class="metric"><b id="lastUpdate">—</b><span>Live age</span></div>
     </div>
   </section>
+  <section class="card">
+    <div class="section">02 / Light output</div>
+    <div class="power-toggle">
+      <div><label for="lightsEnabled">All NeoPixels</label><div class="small" id="lightsStatus">On</div></div>
+      <label class="switch" aria-label="Toggle all NeoPixels">
+        <input type="checkbox" id="lightsEnabled" checked>
+        <span class="switch-track"></span>
+      </label>
+    </div>
+    <p class="sub" style="margin-top:10px">Turn both LED rings on or off while ISS tracking continues.</p>
+  </section>
   <section id="replaySettings" class="card hidden">
-    <div class="section">02 / Playback settings</div>
-    <div class="flex"><label for="speed">Playback speed</label><output id="speedValue">1×</output></div>
+    <div class="section">03 / Playback settings</div>
+    <div class="flex"><label for="speed">ISS replay speed</label><output id="speedValue">1×</output></div>
     <input id="speed" type="range" min="1" max="12" step="1" value="1">
     <p class="sub">1× compresses the entire recorded history into 120 seconds; 10× into 12 seconds.</p>
+    <div class="row"><div class="flex"><label for="lightSpeed">Light animation speed</label><output id="lightSpeedValue">1×</output></div>
+      <input id="lightSpeed" type="range" min="0.25" max="4" step="0.25" value="1">
+    </div>
+    <p class="sub">Controls the breathing and pulse speed of the physical lights during Replay.</p>
     <div class="flex"><span class="small">Recorded progress</span><span class="small" id="replayProgress">0%</span></div>
     <div style="height:5px;background:#0e1520;border-radius:5px;margin-top:9px;overflow:hidden"><div id="replayBar" style="height:100%;width:0;background:#a3bffa"></div></div>
     <button class="primary" id="applySpeed">Apply replay speed</button>
   </section>
   <section class="card">
-    <div class="section">03 / Haptic feedback</div>
+    <div class="section">04 / Haptic feedback</div>
     <div class="flex"><label for="enableHaptic">DA7280 motor</label><input type="checkbox" id="enableHaptic" checked></div>
     <div class="row"><div class="flex"><label for="threshold">Longitude step</label><output id="thresholdValue">0.5°</output></div>
       <input id="threshold" type="range" min="0.1" max="10" step="0.1" value="0.5"></div>
@@ -107,9 +131,10 @@
     <p id="message" class="message" role="status"></p>
   </section>
   <section class="card">
-    <div class="section">04 / Device status</div>
+    <div class="section">05 / Device status</div>
     <div class="flex tiny"><span>Internet Wi-Fi (STA)</span><span id="staStatus">—</span></div>
     <div class="flex tiny" style="margin-top:9px"><span>Local control address</span><span id="deviceIp">—</span></div>
+    <div class="flex tiny" style="margin-top:9px"><span>Weather</span><span id="weatherStatus">—</span></div>
     <div class="flex tiny" style="margin-top:9px"><span>Saved ISS records</span><span id="samples">—</span></div>
     <div class="flex tiny" style="margin-top:9px"><span>Haptic driver</span><span id="hapticStatus">—</span></div>
   </section>
@@ -120,6 +145,7 @@
   let lastState = null;
   let touchedHaptic = false;
   let touchedSpeed = false;
+  let touchedLightSpeed = false;
   let inflight = false;
   let messagingTimer;
   function message(txt, bad=false){
@@ -142,9 +168,10 @@
     el('modeReplay').disabled=!s.hasReplay;
     el('modeReplay').title=s.hasReplay?'':'No iss_data.h: generate from your recorded JSON';
     const liveCurrent=s.staConnected && s.liveDataAgeSec>=0 && s.liveDataAgeSec<=30;
+    const weatherLabel = weatherName(s.weatherCode);
     el('sourceInfo').textContent=s.mode==='live'?
-      (liveCurrent?'Live ISS data · auto refresh ~1.2s':'Live selected · waiting for valid ISS data / Wi-Fi'):
-      `Saved ISS trajectory · ${s.samples} recorded points`;
+      (liveCurrent?`Live ISS + weather · ISS refresh ~1.2s / weather ~60s`:'Live selected · waiting for valid ISS data / Wi-Fi'):
+      `Saved ISS trajectory + weather · ${s.samples} recorded points`;
     el('longitude').textContent=s.hasPosition?`${Number(s.longitude).toFixed(2)}°`:'—';
     el('latitude').textContent=s.hasPosition?`${Number(s.latitude).toFixed(1)}°`:'—';
     el('ledPosition').textContent=s.hasPosition?`${s.led} / ${s.outerLeds}`:'—';
@@ -152,6 +179,8 @@
     el('staStatus').textContent=s.staConnected?'Connected':'Offline';
     el('deviceIp').textContent=s.apIp;
     el('samples').textContent=s.samples;
+    el('weatherStatus').textContent=s.weatherValid ?
+      `${weatherLabel} · ${Number(s.weatherTemperature).toFixed(1)}°C` : 'Waiting for data';
     el('hapticStatus').textContent=s.hapticReady?'Connected':'Not detected';
     el('testHaptic').disabled=!s.hapticReady;
     el('replayProgress').textContent=`${Math.round(s.replayProgress*100)}%`;
@@ -167,6 +196,12 @@
       el('speed').value=s.replaySpeed;
       el('speedValue').textContent=`${s.replaySpeed}×`;
     }
+    if(!touchedLightSpeed){
+      el('lightSpeed').value=s.replayLightSpeed;
+      el('lightSpeedValue').textContent=`${Number(s.replayLightSpeed).toFixed(2).replace(/\.00$/,'')}×`;
+    }
+    el('lightsEnabled').checked=!!s.lightsEnabled;
+    el('lightsStatus').textContent=s.lightsEnabled?'On':'Off';
     const star=el('orbitStar');
     star.classList.toggle('off',!s.hasPosition);
     if(s.hasPosition){
@@ -174,6 +209,17 @@
       star.style.left=`${50+46*Math.cos(angle)}%`;
       star.style.top=`${50+46*Math.sin(angle)}%`;
     }
+  }
+  function weatherName(code){
+    if(code===0) return 'Clear';
+    if(code===1||code===2) return 'Partly cloudy';
+    if(code===3) return 'Overcast';
+    if(code===45||code===48) return 'Fog';
+    if(code>=51&&code<=67) return 'Rain';
+    if(code>=71&&code<=77) return 'Snow';
+    if(code>=80&&code<=82) return 'Showers';
+    if(code>=95) return 'Storm';
+    return 'Unknown';
   }
   async function poll(){
     if(inflight) return;
@@ -189,12 +235,21 @@
   el('modeLive').addEventListener('click',()=>config({mode:'live'}));
   el('modeReplay').addEventListener('click',()=>config({mode:'replay'}));
   el('speed').addEventListener('input',()=>{el('speedValue').textContent=`${el('speed').value}×`;touchedSpeed=true;});
+  el('lightSpeed').addEventListener('input',()=>{el('lightSpeedValue').textContent=`${Number(el('lightSpeed').value).toFixed(2).replace(/\.00$/,'')}×`;touchedLightSpeed=true;});
   el('threshold').addEventListener('input',()=>{el('thresholdValue').textContent=`${Number(el('threshold').value).toFixed(1)}°`;touchedHaptic=true;});
   el('intensity').addEventListener('input',()=>{el('intensityValue').textContent=`${el('intensity').value} / 127`;touchedHaptic=true;});
   el('enableHaptic').addEventListener('change',()=>{touchedHaptic=true;});
-  el('applySpeed').addEventListener('click',async()=>{await config({speed:Number(el('speed').value)});touchedSpeed=false;});
+  el('applySpeed').addEventListener('click',async()=>{
+    await config({speed:Number(el('speed').value),lightSpeed:Number(el('lightSpeed').value)});
+    touchedSpeed=false;touchedLightSpeed=false;
+  });
   el('applyHaptic').addEventListener('click',async()=>{
     await config({threshold:Number(el('threshold').value),intensity:Number(el('intensity').value),hapticEnabled:el('enableHaptic').checked});touchedHaptic=false;
+  });
+  el('lightsEnabled').addEventListener('change',async()=>{
+    const enabled=el('lightsEnabled').checked;
+    el('lightsStatus').textContent=enabled?'On':'Off';
+    await config({lightsEnabled:enabled});
   });
   el('testHaptic').addEventListener('click',async()=>{try{await api('/api/haptic-test',{});message('Haptic test pulse requested');}catch(err){message(err.message,true);}});
   if('serviceWorker' in navigator && window.isSecureContext){
